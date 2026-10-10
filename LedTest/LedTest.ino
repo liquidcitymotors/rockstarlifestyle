@@ -72,7 +72,7 @@ static void printChannel(uint8_t ch) {
     Serial.println(F(")"));
 }
 
-static uint8_t g_solo = 0;
+static uint8_t g_solo = NUM_CH - 1;  // so the first n lands on channel 0
 
 static void solo(uint8_t ch) {
     g_solo = ch;
@@ -88,7 +88,7 @@ static uint16_t g_stepMs   = 600;
 static uint8_t  g_pos      = 0;
 
 // ---- expression pedals ----
-static bool     g_expOn      = true;
+static bool     g_expOn      = false;  // unplugged jacks float and spam
 static int      g_expLast[2] = {-100, -100};
 static uint32_t g_expLastMs  = 0;
 constexpr int      EXP_HYST   = 4;   // counts of 1023 before a change is printed
