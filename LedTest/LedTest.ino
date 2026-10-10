@@ -23,6 +23,7 @@
 //   a / o           all on / all off
 //   c               chase (single dot sweeping, looping)
 //   e               expression pedal readout on/off
+//   (always on)     footswitch presses print their switch number
 //   .               stop any running animation, hold current state
 //   ?               reprint this menu
 
@@ -34,6 +35,8 @@ constexpr uint8_t PIN_LED_LATCH = 10;
 constexpr uint8_t PIN_LED_DATA  = 11;  // SPI0 MOSI
 constexpr uint8_t PIN_LED_CLK   = 13;  // SPI0 SCK
 constexpr uint8_t PIN_EXP[2]    = {14, 15};
+constexpr uint8_t PIN_MUX_SEL[3] = {2, 3, 4};
+constexpr uint8_t PIN_MUX_Z[3]   = {5, 6, 8};
 
 // Sending bytes for chips that aren't fitted is harmless: they fall off
 // the end of the chain, so raise this freely when chips are added.
@@ -110,6 +113,43 @@ static void printExp(uint8_t i, int v) {
     Serial.println('|');
 }
 
+// Accumulate digits so multi-digit channels work; Enter (or any key) ends it.
+static int g_numAcc = -1;
+
+// ---- footswitches (mirrors Switches.cpp: 3 muxes x 8, active low) ----
+constexpr uint8_t NUM_SW      = 24;
+constexpr uint8_t DEBOUNCE_N  = 4;
+static uint32_t g_swStable    = 0;
+static uint8_t  g_swCount[NUM_SW];
+static uint32_t g_swLastMs    = 0;
+
+static void pollSwitches() {
+    uint32_t now = millis();
+    if (now == g_swLastMs) return;  // once per ms
+    g_swLastMs = now;
+
+    uint32_t raw = 0;
+    for (uint8_t ch = 0; ch < 8; ++ch) {
+        for (uint8_t b = 0; b < 3; ++b) digitalWriteFast(PIN_MUX_SEL[b], (ch >> b) & 1);
+        delayMicroseconds(5);
+        for (uint8_t m = 0; m < 3; ++m)
+            if (!digitalReadFast(PIN_MUX_Z[m])) raw |= 1UL << (m * 8 + ch);
+    }
+
+    for (uint8_t sw = 0; sw < NUM_SW; ++sw) {
+        bool r = (raw >> sw) & 1, st = (g_swStable >> sw) & 1;
+        if (r == st) { g_swCount[sw] = 0; continue; }
+        if (++g_swCount[sw] < DEBOUNCE_N) continue;
+        g_swCount[sw] = 0;
+        g_swStable ^= 1UL << sw;
+        if (g_numAcc >= 0) continue;  // don't interleave with typing
+        Serial.print(F("SW ")); if (sw < 10) Serial.print(' '); Serial.print(sw);
+        Serial.print(F("   mux ")); Serial.print(sw / 8 + 1);
+        Serial.print(F(" ch ")); Serial.print(sw % 8);
+        Serial.println(r ? F("   down") : F("   up"));
+    }
+}
+
 static void printMenu() {
     Serial.println();
     Serial.println(F("=== LED + expression bench ==="));
@@ -121,6 +161,7 @@ static void printMenu() {
     Serial.print  (F("  e  expression pedal readout (now "));
     Serial.print  (g_expOn ? F("on") : F("off")); Serial.println(F(")"));
     Serial.println(F("  ?  this menu"));
+    Serial.println(F("  footswitches print their number when pressed"));
     Serial.println();
 }
 
@@ -131,6 +172,9 @@ void setup() {
     SPI.begin();
     setAll(0);
 
+    for (uint8_t b = 0; b < 3; ++b) pinMode(PIN_MUX_SEL[b], OUTPUT);
+    for (uint8_t m = 0; m < 3; ++m) pinMode(PIN_MUX_Z[m], INPUT_PULLUP);
+
     analogReadResolution(10);
     analogReadAveraging(16);
 
@@ -140,8 +184,6 @@ void setup() {
     Serial.println(F("Tip: press n repeatedly and note which light each channel is."));
 }
 
-// Accumulate digits so multi-digit channels work; Enter (or any key) ends it.
-static int g_numAcc = -1;
 
 static void handleChar(char c) {
     if (c >= '0' && c <= '9') {
@@ -207,4 +249,5 @@ void loop() {
     while (Serial.available()) handleChar((char)Serial.read());
     stepAnimation();
     pollExp();
+    pollSwitches();
 }
