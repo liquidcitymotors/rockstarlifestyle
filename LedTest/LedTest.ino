@@ -39,7 +39,7 @@ constexpr uint8_t PIN_EXP[2]    = {14, 15};
 // the end of the chain, so raise this freely when chips are added.
 constexpr uint8_t  NUM_CHIPS = 3;
 constexpr uint8_t  NUM_CH    = NUM_CHIPS * 8;
-constexpr uint32_t SPI_HZ    = 8000000;
+constexpr uint32_t SPI_HZ    = 1000000;  // slow on purpose: long jumper wires to the 595s
 
 // LEDs are common anode: anodes tied to V+, 595 output LOW = LED on.
 constexpr bool LED_ACTIVE_LOW = true;
@@ -56,6 +56,7 @@ static void ledsFlush() {
     SPI.endTransaction();
 
     digitalWriteFast(PIN_LED_LATCH, HIGH);
+    delayMicroseconds(1);  // 595 needs a latch pulse wider than ~50 ns at 3.3V
     digitalWriteFast(PIN_LED_LATCH, LOW);
 }
 

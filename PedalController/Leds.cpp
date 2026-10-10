@@ -9,7 +9,7 @@ namespace Leds {
 namespace {
 
 constexpr uint8_t  NUM_CHIPS = 3;
-constexpr uint32_t SPI_HZ    = 8000000;
+constexpr uint32_t SPI_HZ    = 1000000;  // slow on purpose: long jumper wires to the 595s
 
 uint32_t g_state    = 0;
 uint32_t g_shadowed = 0xFFFFFFFFUL;
@@ -47,6 +47,7 @@ void update() {
     SPI.endTransaction();
 
     digitalWriteFast(Config::PIN_LED_LATCH, HIGH);
+    delayMicroseconds(1);  // 595 needs a latch pulse wider than ~50 ns at 3.3V
     digitalWriteFast(Config::PIN_LED_LATCH, LOW);
 }
 
