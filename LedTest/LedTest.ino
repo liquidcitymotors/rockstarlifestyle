@@ -37,7 +37,7 @@ constexpr uint8_t PIN_EXP[2]    = {14, 15};
 
 // Sending bytes for chips that aren't fitted is harmless: they fall off
 // the end of the chain, so raise this freely when chips are added.
-constexpr uint8_t  NUM_CHIPS = 3;
+constexpr uint8_t  NUM_CHIPS = 4;
 constexpr uint8_t  NUM_CH    = NUM_CHIPS * 8;
 constexpr uint32_t SPI_HZ    = 1000000;  // slow on purpose: long jumper wires to the 595s
 
