@@ -44,10 +44,10 @@ constexpr uint8_t GRID_SW[SW_ROWS][SW_COLS] = {
 // Two-digit display, segments in order a b c d e f g dp
 // (a top, b upper right, c lower right, d bottom, e lower left, f upper left, g middle).
 constexpr uint8_t DIGIT_SEG[2][8] = {
-    {29, NO_LED, 30,  8, 31, NO_LED, NO_LED, NO_LED},  // left digit
-    {NO_LED, 13, 26, 12, 27, 11, 28, 14},              // right digit
+    {29, NO_LED, 30,  8, 31, 10, 14, NO_LED},  // left digit
+    {NO_LED, 13, 26, 12, 27, 11, 28, NO_LED},  // right digit
 };
-// Channels 9, 10 and 25 light nothing.
+// Channels 9 and 25 light nothing.
 
 constexpr uint8_t PIN_EXP1      = 14;
 constexpr uint8_t PIN_EXP2      = 15;
