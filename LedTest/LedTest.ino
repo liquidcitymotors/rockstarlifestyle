@@ -1,27 +1,30 @@
-// LedTest — standalone bring-up sketch for the 18-LED driver board.
+// LedTest — standalone bench harness for the LED driver board and the
+// expression-pedal inputs.
 //
 // Self-contained on purpose: it re-declares the same pins and the same
 // 74HC595 SPI driver as PedalController/Leds.cpp so you can flash it
 // without disturbing the main firmware, but it exercises the identical
 // shift-out path that will ship.
 //
-// Hardware: Teensy 3.2 -> 3x M74HC595 daisy chain over 5-pin connector
-//   V+ (3.3V to start), GND, DATA=pin11 (MOSI), CLK=pin13 (SCK), LATCH=pin10
+// Hardware: Teensy 3.2 -> M74HC595 daisy chain, LEDs common anode on 3.3V
+//   DATA=pin11 (MOSI), CLK=pin13 (SCK), LATCH=pin10
+//   EXP1=pin14 (A0), EXP2=pin15 (A1), pot wiper on tip, 3.3V/GND on ring/sleeve
 //
-// Build/flash:
-//   arduino-cli compile --fqbn teensy:avr:teensy31:usb=serial LedTest
-//   arduino-cli upload  --fqbn teensy:avr:teensy31:usb=serial -p <port> LedTest
+// Build/flash:  ./flash.sh LedTest      Monitor:  ./serial.sh
 //
-// Serial menu @ 115200 — type a key + Enter (or just the key):
-//   w        walk: light one LED at a time, 0..17, printing each index
-//   a        all on
-//   o        all off
-//   c        chase (single dot sweeping, looping)
-//   k        knight-rider style bounce
-//   b        binary count on the low bits
-//   <number> toggle that LED index (0..17)
-//   .        stop any running animation, hold current state
-//   ?        reprint this menu
+// Mapping channels to lights: press n / p (or type a number + Enter) to
+// light one channel at a time, then write down which physical light it is.
+// The channel number is the bit index used by Leds::set() in the firmware.
+//
+// Serial menu @ 115200:
+//   <number> Enter  solo that channel (only it lit)
+//   n / p           next / previous channel (solo)
+//   w               walk: auto-step through every channel, printing each
+//   a / o           all on / all off
+//   c               chase (single dot sweeping, looping)
+//   e               expression pedal readout on/off
+//   .               stop any running animation, hold current state
+//   ?               reprint this menu
 
 #include <Arduino.h>
 #include <SPI.h>
@@ -30,55 +33,92 @@
 constexpr uint8_t PIN_LED_LATCH = 10;
 constexpr uint8_t PIN_LED_DATA  = 11;  // SPI0 MOSI
 constexpr uint8_t PIN_LED_CLK   = 13;  // SPI0 SCK
+constexpr uint8_t PIN_EXP[2]    = {14, 15};
 
+// Sending bytes for chips that aren't fitted is harmless: they fall off
+// the end of the chain, so raise this freely when chips are added.
 constexpr uint8_t  NUM_CHIPS = 3;
-constexpr uint8_t  NUM_LEDS  = 18;     // 18 wired of 24 available
+constexpr uint8_t  NUM_CH    = NUM_CHIPS * 8;
 constexpr uint32_t SPI_HZ    = 8000000;
 
 // LEDs are common anode: anodes tied to V+, 595 output LOW = LED on.
 constexpr bool LED_ACTIVE_LOW = true;
 
-static uint32_t g_state = 0;
+static uint64_t g_state = 0;
 
 // ---- 74HC595 driver (mirrors Leds.cpp) ----
 static void ledsFlush() {
-    const uint32_t out = LED_ACTIVE_LOW ? ~g_state : g_state;
+    const uint64_t out = LED_ACTIVE_LOW ? ~g_state : g_state;
 
     SPI.beginTransaction(SPISettings(SPI_HZ, MSBFIRST, SPI_MODE0));
-    SPI.transfer((out >> 16) & 0xFF);
-    SPI.transfer((out >>  8) & 0xFF);
-    SPI.transfer((out      ) & 0xFF);
+    for (int8_t chip = NUM_CHIPS - 1; chip >= 0; --chip)
+        SPI.transfer((out >> (chip * 8)) & 0xFF);
     SPI.endTransaction();
 
     digitalWriteFast(PIN_LED_LATCH, HIGH);
     digitalWriteFast(PIN_LED_LATCH, LOW);
 }
 
-static void setAll(uint32_t mask) { g_state = mask; ledsFlush(); }
-static void setOne(uint8_t idx, bool on) {
-    if (idx >= NUM_CHIPS * 8) return;
-    if (on) g_state |=  (1UL << idx);
-    else    g_state &= ~(1UL << idx);
-    ledsFlush();
+static void setAll(uint64_t mask) { g_state = mask; ledsFlush(); }
+static uint64_t allMask() { return NUM_CH >= 64 ? ~0ULL : ((1ULL << NUM_CH) - 1); }
+
+static void printChannel(uint8_t ch) {
+    Serial.print(F("ch "));
+    if (ch < 10) Serial.print(' ');
+    Serial.print(ch);
+    Serial.print(F("   chip ")); Serial.print(ch / 8 + 1);
+    Serial.print(F(" Q")); Serial.print((char)('A' + ch % 8));
+    Serial.print(F(" (pin ")); Serial.print(ch % 8 == 0 ? 15 : ch % 8);
+    Serial.println(F(")"));
+}
+
+static uint8_t g_solo = 0;
+
+static void solo(uint8_t ch) {
+    g_solo = ch;
+    setAll(1ULL << ch);
+    printChannel(ch);
 }
 
 // ---- animation state ----
-enum class Mode { Hold, Walk, Chase, Knight, Binary };
-static Mode     g_mode      = Mode::Hold;
-static uint32_t g_lastStep  = 0;
-static uint16_t g_stepMs    = 250;
-static uint8_t  g_pos       = 0;
-static int8_t   g_dir       = 1;
-static uint32_t g_counter   = 0;
+enum class Mode { Hold, Walk, Chase };
+static Mode     g_mode     = Mode::Hold;
+static uint32_t g_lastStep = 0;
+static uint16_t g_stepMs   = 600;
+static uint8_t  g_pos      = 0;
+
+// ---- expression pedals ----
+static bool     g_expOn      = true;
+static int      g_expLast[2] = {-100, -100};
+static uint32_t g_expLastMs  = 0;
+constexpr int      EXP_HYST   = 4;   // counts of 1023 before a change is printed
+constexpr uint32_t EXP_PERIOD = 20;  // ms between reads
+
+static void printExp(uint8_t i, int v) {
+    constexpr uint8_t BAR = 32;
+    uint8_t fill = (uint32_t)v * BAR / 1023;
+    Serial.print(F("EXP")); Serial.print(i + 1);
+    Serial.print(F(" "));
+    if (v < 1000) Serial.print(' ');
+    if (v < 100)  Serial.print(' ');
+    if (v < 10)   Serial.print(' ');
+    Serial.print(v);
+    Serial.print(F("  cc ")); Serial.print(v >> 3);
+    Serial.print(F("\t|"));
+    for (uint8_t k = 0; k < BAR; ++k) Serial.print(k < fill ? '#' : ' ');
+    Serial.println('|');
+}
 
 static void printMenu() {
     Serial.println();
-    Serial.println(F("=== LED bring-up ==="));
-    Serial.println(F("  w  walk one LED at a time (0..17, prints index)"));
+    Serial.println(F("=== LED + expression bench ==="));
+    Serial.print  (F("  <number> Enter  solo that channel (0..")); Serial.print(NUM_CH - 1); Serial.println(F(")"));
+    Serial.println(F("  n / p           next / previous channel"));
+    Serial.println(F("  w  walk (auto-step, prints each channel)"));
     Serial.println(F("  a  all on        o  all off"));
-    Serial.println(F("  c  chase         k  knight-rider bounce"));
-    Serial.println(F("  b  binary count  .  stop/hold"));
-    Serial.println(F("  <number>  toggle that LED (0..17)"));
+    Serial.println(F("  c  chase         .  stop/hold"));
+    Serial.print  (F("  e  expression pedal readout (now "));
+    Serial.print  (g_expOn ? F("on") : F("off")); Serial.println(F(")"));
     Serial.println(F("  ?  this menu"));
     Serial.println();
 }
@@ -90,81 +130,80 @@ void setup() {
     SPI.begin();
     setAll(0);
 
+    analogReadResolution(10);
+    analogReadAveraging(16);
+
     uint32_t t0 = millis();
     while (!Serial && (millis() - t0) < 2000) { /* wait briefly for host */ }
     printMenu();
-    Serial.println(F("Tip: start with 'w' to confirm each LED lights in index order."));
+    Serial.println(F("Tip: press n repeatedly and note which light each channel is."));
 }
 
-// Accumulate digits so multi-digit indices (10..17) work.
-static int   g_numAcc   = -1;
+// Accumulate digits so multi-digit channels work; Enter (or any key) ends it.
+static int g_numAcc = -1;
 
 static void handleChar(char c) {
     if (c >= '0' && c <= '9') {
         g_numAcc = (g_numAcc < 0 ? 0 : g_numAcc) * 10 + (c - '0');
+        Serial.print(c);  // echo, since screen doesn't
         return;
     }
-    // any non-digit terminates a pending number -> toggle it
     if (g_numAcc >= 0) {
-        uint8_t idx = (uint8_t)g_numAcc;
+        int ch = g_numAcc;
         g_numAcc = -1;
-        if (idx < NUM_LEDS) {
-            bool now = !((g_state >> idx) & 1);
-            setOne(idx, now);
-            Serial.print(F("LED ")); Serial.print(idx);
-            Serial.println(now ? F(" ON") : F(" OFF"));
-        } else {
-            Serial.print(F("index out of range (0..")); Serial.print(NUM_LEDS - 1); Serial.println(F(")"));
-        }
-        if (c == '\r' || c == '\n') return; // the terminator was just whitespace
+        Serial.println();
+        if (ch < NUM_CH) { g_mode = Mode::Hold; solo((uint8_t)ch); }
+        else { Serial.print(F("channel out of range (0..")); Serial.print(NUM_CH - 1); Serial.println(F(")")); }
+        if (c == '\r' || c == '\n') return;
     }
 
     switch (c) {
-        case 'w': g_mode = Mode::Walk;   g_pos = 0; g_lastStep = 0; setAll(0); Serial.println(F("walk")); break;
-        case 'c': g_mode = Mode::Chase;  g_pos = 0; g_lastStep = 0; setAll(0); Serial.println(F("chase")); break;
-        case 'k': g_mode = Mode::Knight; g_pos = 0; g_dir = 1; g_lastStep = 0; setAll(0); Serial.println(F("knight")); break;
-        case 'b': g_mode = Mode::Binary; g_counter = 0; g_lastStep = 0; Serial.println(F("binary")); break;
-        case 'a': g_mode = Mode::Hold; setAll((1UL << NUM_LEDS) - 1); Serial.println(F("all on")); break;
+        case 'n': g_mode = Mode::Hold; solo((g_solo + 1) % NUM_CH); break;
+        case 'p': g_mode = Mode::Hold; solo((g_solo + NUM_CH - 1) % NUM_CH); break;
+        case 'w': g_mode = Mode::Walk;  g_pos = 0; g_lastStep = 0; Serial.println(F("walk")); break;
+        case 'c': g_mode = Mode::Chase; g_pos = 0; g_lastStep = 0; Serial.println(F("chase")); break;
+        case 'a': g_mode = Mode::Hold; setAll(allMask()); Serial.println(F("all on")); break;
         case 'o': g_mode = Mode::Hold; setAll(0); Serial.println(F("all off")); break;
         case '.': g_mode = Mode::Hold; Serial.println(F("hold")); break;
+        case 'e':
+            g_expOn = !g_expOn;
+            g_expLast[0] = g_expLast[1] = -100;  // reprint both on enable
+            Serial.println(g_expOn ? F("expression readout on") : F("expression readout off"));
+            break;
         case '?': printMenu(); break;
-        case '\r': case '\n': case ' ': break;
         default: break;
     }
 }
 
 static void stepAnimation() {
+    if (g_mode == Mode::Hold) return;
     uint32_t now = millis();
-    if (now - g_lastStep < g_stepMs) return;
+    uint16_t period = g_mode == Mode::Walk ? g_stepMs : 80;
+    if (now - g_lastStep < period) return;
     g_lastStep = now;
 
-    switch (g_mode) {
-        case Mode::Walk:
-            setAll(1UL << g_pos);
-            Serial.print(F("LED ")); Serial.println(g_pos);
-            g_pos = (g_pos + 1) % NUM_LEDS;
-            break;
-        case Mode::Chase:
-            setAll(1UL << g_pos);
-            g_pos = (g_pos + 1) % NUM_LEDS;
-            break;
-        case Mode::Knight:
-            setAll(1UL << g_pos);
-            if (g_pos == NUM_LEDS - 1) g_dir = -1;
-            else if (g_pos == 0)       g_dir = 1;
-            g_pos += g_dir;
-            break;
-        case Mode::Binary:
-            setAll(g_counter & ((1UL << NUM_LEDS) - 1));
-            g_counter++;
-            break;
-        case Mode::Hold:
-        default:
-            break;
+    if (g_mode == Mode::Walk) solo(g_pos);
+    else                      setAll(1ULL << g_pos);
+    g_pos = (g_pos + 1) % NUM_CH;
+}
+
+static void pollExp() {
+    if (!g_expOn || g_numAcc >= 0) return;  // don't interleave with typing
+    uint32_t now = millis();
+    if (now - g_expLastMs < EXP_PERIOD) return;
+    g_expLastMs = now;
+
+    for (uint8_t i = 0; i < 2; ++i) {
+        int v = analogRead(PIN_EXP[i]);
+        if (abs(v - g_expLast[i]) >= EXP_HYST) {
+            g_expLast[i] = v;
+            printExp(i, v);
+        }
     }
 }
 
 void loop() {
     while (Serial.available()) handleChar((char)Serial.read());
     stepAnimation();
+    pollExp();
 }
