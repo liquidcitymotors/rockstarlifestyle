@@ -24,6 +24,8 @@
 //   c               chase (single dot sweeping, looping)
 //   e               expression pedal readout on/off
 //   (always on)     footswitch presses print their switch number
+//   + / -           show the next / previous number (00..99) on the display
+//   x               display follows EXP1 (0..99), like a dry pedal
 //   .               stop any running animation, hold current state
 //   ?               reprint this menu
 
@@ -116,6 +118,33 @@ static void printExp(uint8_t i, int v) {
 // Accumulate digits so multi-digit channels work; Enter (or any key) ends it.
 static int g_numAcc = -1;
 
+// ---- two-digit display (mirror Config::DIGIT_SEG; segments a b c d e f g dp) ----
+constexpr uint8_t NO_LED = 0xFF;
+constexpr uint8_t DIGIT_SEG[2][8] = {
+    {29, NO_LED, 30,  8, 31, 10, 14, NO_LED},  // left digit
+    {NO_LED, 13, 26, 12, 27, 11, 28, NO_LED},  // right digit
+};
+constexpr uint8_t FONT[10] = {0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07, 0x7F, 0x6F};
+static int  g_dispNum   = -1;
+static bool g_dispPedal = false;
+
+static void showNumber(int n) {
+    g_dispNum = n;
+    uint8_t bits[2] = {(uint8_t)(n >= 10 ? FONT[n / 10] : 0), FONT[n % 10]};
+    for (uint8_t d = 0; d < 2; ++d)
+        for (uint8_t sg = 0; sg < 8; ++sg) {
+            uint8_t ch = DIGIT_SEG[d][sg];
+            if (ch == NO_LED) continue;
+            if ((bits[d] >> sg) & 1) g_state |=  (1ULL << ch);
+            else                     g_state &= ~(1ULL << ch);
+        }
+    ledsFlush();
+}
+
+static void printShown(int n) {
+    Serial.print(F("display ")); Serial.println(n);
+}
+
 // ---- footswitches (mirrors Switches.cpp: 3 muxes x 8, active low) ----
 constexpr uint8_t NUM_SW      = 24;
 constexpr uint8_t DEBOUNCE_N  = 4;
@@ -162,6 +191,8 @@ static void printMenu() {
     Serial.print  (g_expOn ? F("on") : F("off")); Serial.println(F(")"));
     Serial.println(F("  ?  this menu"));
     Serial.println(F("  footswitches print their number when pressed"));
+    Serial.println(F("  + / -  step the display through 00..99"));
+    Serial.println(F("  x      display follows EXP1 (dry pedal)"));
     Serial.println();
 }
 
@@ -208,6 +239,13 @@ static void handleChar(char c) {
         case 'a': g_mode = Mode::Hold; setAll(allMask()); Serial.println(F("all on")); break;
         case 'o': g_mode = Mode::Hold; setAll(0); Serial.println(F("all off")); break;
         case '.': g_mode = Mode::Hold; Serial.println(F("hold")); break;
+        case '+': g_mode = Mode::Hold; showNumber((g_dispNum + 1) % 100);  printShown(g_dispNum); break;
+        case '-': g_mode = Mode::Hold; showNumber((g_dispNum + 99) % 100); printShown(g_dispNum); break;
+        case 'x':
+            g_dispPedal = !g_dispPedal;
+            g_expLast[0] = g_expLast[1] = -100;
+            Serial.println(g_dispPedal ? F("display follows EXP1") : F("display released"));
+            break;
         case 'e':
             g_expOn = !g_expOn;
             g_expLast[0] = g_expLast[1] = -100;  // reprint both on enable
@@ -231,7 +269,7 @@ static void stepAnimation() {
 }
 
 static void pollExp() {
-    if (!g_expOn || g_numAcc >= 0) return;  // don't interleave with typing
+    if ((!g_expOn && !g_dispPedal) || g_numAcc >= 0) return;  // no interleaving with typing
     uint32_t now = millis();
     if (now - g_expLastMs < EXP_PERIOD) return;
     g_expLastMs = now;
@@ -240,7 +278,8 @@ static void pollExp() {
         int v = analogRead(PIN_EXP[i]);
         if (abs(v - g_expLast[i]) >= EXP_HYST) {
             g_expLast[i] = v;
-            printExp(i, v);
+            if (g_expOn) printExp(i, v);
+            if (i == 0 && g_dispPedal) { int n = (v * 99 + 511) / 1023; if (n != g_dispNum) { showNumber(n); printShown(n); } }
         }
     }
 }
