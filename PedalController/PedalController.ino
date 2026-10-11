@@ -20,7 +20,7 @@
 //
 // Soft takeover: after focus moves, EXP1 doesn't change the focused CC until
 // the pedal reaches (or passes) that CC's last value. While waiting, the
-// focused LED blinks and the display's dot is lit. The display shows the
+// focused LED blinks if its switch is on (an off switch stays dark). The display shows the
 // focused CC's value scaled to 0..99.
 
 namespace Switches { void dispatchPending(); }
@@ -137,8 +137,8 @@ static void onPedal() {
 
 static void blinkFocus() {
     if (g_focus == NO_POS) return;
-    if (g_caught) setToggleLed(g_focus, g_on[g_focus]);
-    else          setToggleLed(g_focus, (millis() / BLINK_MS) & 1);
+    if (g_caught || !g_on[g_focus]) setToggleLed(g_focus, g_on[g_focus]);
+    else                            setToggleLed(g_focus, (millis() / BLINK_MS) & 1);
 }
 
 static void onScanTick() {
