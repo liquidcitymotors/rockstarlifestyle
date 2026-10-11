@@ -298,7 +298,7 @@ static void pollExp() {
     if (now - g_expLastMs < EXP_PERIOD) return;
     g_expLastMs = now;
 
-    for (uint8_t i = 0; i < 2; ++i) {
+    for (uint8_t i = 0; i < 1; ++i) {  // EXP1 only; EXP2 isn't wired
         int v = analogRead(PIN_EXP[i]);
         if (abs(v - g_expLast[i]) >= EXP_HYST) {
             g_expLast[i] = v;
