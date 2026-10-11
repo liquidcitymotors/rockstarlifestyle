@@ -26,6 +26,7 @@
 //   (always on)     footswitch presses print their switch number
 //   + / -           show the next / previous number (00..99) on the display
 //   x               display follows EXP1 (0..99), like a dry pedal
+//   z               print all ten analog pins (14..23 = A0..A9) together
 //   .               stop any running animation, hold current state
 //   ?               reprint this menu
 
@@ -193,6 +194,7 @@ static void printMenu() {
     Serial.println(F("  footswitches print their number when pressed"));
     Serial.println(F("  + / -  step the display through 00..99"));
     Serial.println(F("  x      display follows EXP1 (dry pedal)"));
+    Serial.println(F("  z      print all analog pins (find which one the pedal is on)"));
     Serial.println();
 }
 
@@ -246,6 +248,10 @@ static void handleChar(char c) {
             g_expLast[0] = g_expLast[1] = -100;
             Serial.println(g_dispPedal ? F("display follows EXP1") : F("display released"));
             break;
+        case 'z':
+            g_scanAll = !g_scanAll;
+            Serial.println(g_scanAll ? F("scanning A0..A9 (pin 14..23)") : F("scan off"));
+            break;
         case 'e':
             g_expOn = !g_expOn;
             g_expLast[0] = g_expLast[1] = -100;  // reprint both on enable
@@ -266,6 +272,25 @@ static void stepAnimation() {
     if (g_mode == Mode::Walk) solo(g_pos);
     else                      setAll(1ULL << g_pos);
     g_pos = (g_pos + 1) % NUM_CH;
+}
+
+static bool     g_scanAll    = false;
+static uint32_t g_scanLastMs = 0;
+
+static void pollScanAll() {
+    if (!g_scanAll || g_numAcc >= 0) return;
+    uint32_t now = millis();
+    if (now - g_scanLastMs < 250) return;
+    g_scanLastMs = now;
+    for (uint8_t a = 0; a < 10; ++a) {
+        int v = analogRead(14 + a);
+        Serial.print(F("A")); Serial.print(a); Serial.print(F("(")); Serial.print(14 + a); Serial.print(F(") "));
+        if (v < 1000) Serial.print(' ');
+        if (v < 100)  Serial.print(' ');
+        if (v < 10)   Serial.print(' ');
+        Serial.print(v); Serial.print(F("  "));
+    }
+    Serial.println();
 }
 
 static void pollExp() {
@@ -289,4 +314,5 @@ void loop() {
     stepAnimation();
     pollExp();
     pollSwitches();
+    pollScanAll();
 }
