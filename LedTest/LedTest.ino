@@ -96,6 +96,8 @@ static uint8_t  g_pos      = 0;
 
 // ---- expression pedals ----
 static bool     g_expOn      = false;  // unplugged jacks float and spam
+static bool     g_scanAll    = false;
+static uint32_t g_scanLastMs = 0;
 static int      g_expLast[2] = {-100, -100};
 static uint32_t g_expLastMs  = 0;
 constexpr int      EXP_HYST   = 4;   // counts of 1023 before a change is printed
@@ -273,9 +275,6 @@ static void stepAnimation() {
     else                      setAll(1ULL << g_pos);
     g_pos = (g_pos + 1) % NUM_CH;
 }
-
-static bool     g_scanAll    = false;
-static uint32_t g_scanLastMs = 0;
 
 static void pollScanAll() {
     if (!g_scanAll || g_numAcc >= 0) return;
